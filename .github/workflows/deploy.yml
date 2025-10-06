@@ -18,5 +18,5 @@ jobs:
           key: ${{ secrets.VM_SSH_KEY }}
           port: ${{ secrets.VM_SSH_PORT }}
           script: |
-            cd /opt/ppe-detector
+            cd /opt/ojitoo-frames
             ./deploy.sh
