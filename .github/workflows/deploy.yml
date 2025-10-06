@@ -15,7 +15,7 @@ jobs:
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USERNAME }}
-          key: ${{ secrets.VM_SSH_KEY }}
+          password: ${{ secrets.VM_PASSWORD }}
           port: ${{ secrets.VM_SSH_PORT }}
           script: |
             cd /opt/ojitoo-frames
