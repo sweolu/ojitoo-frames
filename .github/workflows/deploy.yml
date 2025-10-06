@@ -19,4 +19,4 @@ jobs:
           port: ${{ secrets.VM_SSH_PORT }}
           script: |
             cd /opt/ojitoo-frames
-            ./deploy.sh
+            sudo ./deploy.sh
