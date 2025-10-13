@@ -8,6 +8,7 @@ APP_NAME="ojitoo-frames"
 IMAGE_NAME="ojitoo-frames:latest"
 CONTAINER_NAME="ojitoo-frames"
 PORT=8000
+ENV_FILE=".env"   # Path to your env file
 
 # ------------------------------
 # Step 1: Ensure script runs as root or with sudo
@@ -39,20 +40,29 @@ fi
 # ------------------------------
 if command -v nvidia-smi &> /dev/null; then
     GPU_FLAG="--gpus all"
-    echo "NVIDIA GPU detected. Running container with GPU support."
+    echo "🟢 NVIDIA GPU detected. Running container with GPU support."
 else
     GPU_FLAG=""
-    echo "No NVIDIA GPU detected. Running without GPU acceleration."
+    echo "⚪ No NVIDIA GPU detected. Running without GPU acceleration."
 fi
 
 # ------------------------------
-# Step 4: Build the Docker image
+# Step 4: Verify .env file exists
 # ------------------------------
-echo "Building Docker image..."
+if [ ! -f "$ENV_FILE" ]; then
+  echo "🚨 ERROR: $ENV_FILE not found in the current directory."
+  echo "Please create a .env file with the required environment variables."
+  exit 1
+fi
+
+# ------------------------------
+# Step 5: Build the Docker image
+# ------------------------------
+echo "🛠️  Building Docker image..."
 docker build -t $IMAGE_NAME .
 
 # ------------------------------
-# Step 5: Stop and remove any old container
+# Step 6: Stop and remove any old container
 # ------------------------------
 if [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]; then
     echo "🧹 Stopping old container..."
@@ -61,19 +71,21 @@ if [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]; then
 fi
 
 # ------------------------------
-# Step 6: Run the new container
+# Step 7: Run the new container with .env
 # ------------------------------
-echo "🚀 Starting new container..."
+echo "🚀 Starting new container with env vars..."
 docker run -d \
   --name $CONTAINER_NAME \
   -p ${PORT}:8000 \
   $GPU_FLAG \
+  --env-file $ENV_FILE \
   --restart unless-stopped \
   $IMAGE_NAME
 
 # ------------------------------
-# Step 7: Confirm deployment
+# Step 8: Confirm deployment
 # ------------------------------
-echo "Deployment complete!"
-echo "App running on: http://<your-ip>:${PORT}"
+echo "✅ Deployment complete!"
+echo "🌐 App running on: http://<your-ip>:${PORT}"
+echo "📄 Environment variables loaded from: $ENV_FILE"
 
