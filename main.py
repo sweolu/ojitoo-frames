@@ -4,6 +4,7 @@ import uuid
 import json
 import shutil
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List
 
 import cv2
@@ -109,9 +110,12 @@ def draw_bounding_boxes(image_path: str, detections: List[Dict]) -> str:
     return annotated_path
 
 
-def build_alert_payload(camera_id: str, detections: List[Dict]) -> Dict:
+def build_alert_payload(frame_id: str, captured_at: str, camera_id: str, detections: List[Dict]) -> Dict:
     """Constructs the alert payload."""
     return {
+            "frameId": frame_id,
+            "capturedAt": captured_at,
+            "processedAt": datetime.now(timezone.utc).isoformat(),
             "cameraId": camera_id,
             "status": "new",
             "ppeDetections": detections,
@@ -300,7 +304,7 @@ def detect_missing_ppe(image_path: str) -> List[Dict]:
     out_detections = merge_detections(out_detections)
     return out_detections
 
-def handle_alert(camera_id: str, detections: List[Dict], annotated_image: str) -> bool:
+def handle_alert(frame_id: str, captured_at: str, camera_id: str, detections: List[Dict], annotated_image: str) -> bool:
     """Handle cooldown logic and alert sending."""
     now = time.time()
     last_time = last_alert_time.get(camera_id, 0)
@@ -308,7 +312,7 @@ def handle_alert(camera_id: str, detections: List[Dict], annotated_image: str) -
         logger.info(f"⏳ Skipping alert for {camera_id} (cooldown active)")
         return False
 
-    payload = build_alert_payload(camera_id, detections)
+    payload = build_alert_payload(frame_id, captured_at, camera_id, detections)
     success = send_alert(payload, annotated_image)
     if success:
         last_alert_time[camera_id] = now
@@ -319,7 +323,7 @@ def handle_alert(camera_id: str, detections: List[Dict], annotated_image: str) -
 # API Endpoint
 # ---------------------------------------------------------------------
 @app.post("/analyze/")
-async def analyze_frame(file: UploadFile = File(...), cameraId: str = Form(...)):
+async def analyze_frame(file: UploadFile = File(...), camera_id: str = Form(...), frame_id: str = Form(...), captured_at: str = Form(...)):
     """
     Process a single camera frame, detect missing PPE, and send alert if needed.
     """
@@ -330,7 +334,7 @@ async def analyze_frame(file: UploadFile = File(...), cameraId: str = Form(...))
 
     if detections:
         annotated_path = draw_bounding_boxes(temp_file, detections)
-        alert_sent = handle_alert(cameraId, detections, annotated_path)
+        alert_sent = handle_alert(frame_id, captured_at, camera_id, detections, annotated_path)
 
     # Cleanup
     for path in [temp_file, annotated_path]:
@@ -338,7 +342,8 @@ async def analyze_frame(file: UploadFile = File(...), cameraId: str = Form(...))
             os.remove(path)
 
     return {
-            "cameraId": cameraId,
+            "frameId": frame_id,
+            "cameraId": camera_id,
             "detections": detections,
             "alertSent": alert_sent,
             }
