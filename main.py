@@ -202,107 +202,151 @@ def iou(box1, box2) -> float:
     union = a1 + a2 - inter_area
     return inter_area / union if union > 0 else 0.0
 
-
 def detect_missing_ppe(image_path: str) -> List[Dict]:
     """
-    Run YOLO model on the image and return detections for missing PPE.
-    Returns a list of dicts: {"missingPpe": str, "confidence": float, "bbox": {...}}
-    Confidence is computed from region (person/head/ear) detection confidence
-    reduced by the maximum overlap with the corresponding PPE boxes.
+    Detect missing PPE items by identifying persons without required protective equipment.
+    
+    Args:
+        image_path: Path to the image file
+        
+    Returns:
+        List of dictionaries containing missing PPE detections with bbox and confidence
     """
-    results = model.predict(image_path, conf=YOLO_CONFIDENCE_THRESHOLD, verbose=False)
-    out_detections: List[Dict] = []
-
-    for r in results:
-        # store detections as dicts with bbox and conf for easier use
-        persons = []   # list of {"bbox": (x1,y1,x2,y2), "conf": c}
+    out_detections = []
+    
+    try:
+        # Run YOLO inference
+        results = model.predict(
+            source=image_path,
+            conf=YOLO_CONFIDENCE_THRESHOLD,
+            iou=IOU_THRESHOLD,
+            verbose=False
+        )
+        
+        if not results or len(results) == 0:
+            return out_detections
+        
+        # Extract detections from first result
+        result = results[0]
+        boxes = result.boxes
+        
+        if boxes is None or len(boxes) == 0:
+            return out_detections
+        
+        # Get class names from model
+        class_names = model.names
+        
+        # Organize detections by class
+        persons = []
         heads = []
-        ears = []
         helmets = []
-        earmuffs = []
-
-        # parse model outputs; normalize class names to lowercase
-        for box in r.boxes:
-            cls_id = int(box.cls)
-            class_name = model.names[cls_id].lower()  # use the actual model names
-            conf = float(box.conf)
-            # skip any detection below the threshold (already filtered by predict conf, but safe)
-            if conf < YOLO_CONFIDENCE_THRESHOLD:
-                continue
-            # xyxy might be a tensor-like; mapping to float should work as earlier
-            x1, y1, x2, y2 = map(float, box.xyxy[0])
-
-            entry = {"bbox": (x1, y1, x2, y2), "conf": conf}
-
+        ears = []
+        ear_mufs = []
+        
+        for box in boxes:
+            xyxy = box.xyxy[0].cpu().numpy()
+            conf = float(box.conf[0].cpu().numpy())
+            cls_id = int(box.cls[0].cpu().numpy())
+            class_name = class_names[cls_id]
+            
+            bbox_dict = {
+                "bbox": [float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])],
+                "conf": conf,
+                "center": ((float(xyxy[0]) + float(xyxy[2])) / 2, 
+                          (float(xyxy[1]) + float(xyxy[3])) / 2)
+            }
+            
             if class_name == "person":
-                persons.append(entry)
+                persons.append(bbox_dict)
             elif class_name == "head":
-                heads.append(entry)
-            elif class_name == "ear":
-                ears.append(entry)
+                heads.append(bbox_dict)
             elif class_name == "helmet":
-                helmets.append(entry)
-            elif class_name == "ear-mufs" or class_name == "earmuffs" or class_name == "ear_mufs":
-                earmuffs.append(entry)
-
-
-        # debug counts (optional)
-        print(f"[DEBUG] counts -> person:{len(persons)} head:{len(heads)} ear:{len(ears)} "
-              f"helmet:{len(helmets)} earmuffs:{len(earmuffs)}")
-
-        # Helper to compute max IoU of a region vs a list of PPE boxes
-        def max_overlap(region_bbox, ppe_list):
-            if not ppe_list:
-                return 0.0
-            overlaps = [iou(region_bbox, p["bbox"]) for p in ppe_list]
-            return max(overlaps) if overlaps else 0.0
-
-        # --- Helmet missing logic ---
-        # prefer checking on head regions; if no heads, check persons
-        head_regions = heads if heads else persons
-        # we will mark missing helmet once per region (head or person)
-        for region in head_regions:
-            region_bbox = region["bbox"]
-            region_conf = region["conf"]
-            best_iou = max_overlap(region_bbox, helmets)
-            # if best_iou is below IOU_THRESHOLD we consider "no helmet covering region"
-            if best_iou < IOU_THRESHOLD:
-                # missing_confidence: how confident we are it's missing
-                missing_conf = region_conf * (1.0 - best_iou)
+                helmets.append(bbox_dict)
+            elif class_name == "ear":
+                ears.append(bbox_dict)
+            elif class_name == "ear-mufs":
+                ear_mufs.append(bbox_dict)
+        
+        # Check each head for missing helmet
+        for head in heads:
+            if not has_ppe_nearby(head, helmets):
                 out_detections.append({
                     "missingPpe": "helmet",
-                    "confidence": float(round(missing_conf, 4)),
+                    "confidence": head["conf"],
                     "bbox": {
-                        "x": float(region_bbox[0]),
-                        "y": float(region_bbox[1]),
-                        "width": float(region_bbox[2] - region_bbox[0]),
-                        "height": float(region_bbox[3] - region_bbox[1])
-                        }
-                    })
-
-        # --- Earmuff missing logic ---
-        # prefer ear boxes (most precise), otherwise try head regions
-        ear_regions = ears if ears else heads if heads else persons
-        for region in ear_regions:
-            region_bbox = region["bbox"]
-            region_conf = region["conf"]
-            best_iou = max_overlap(region_bbox, earmuffs)
-            if best_iou < IOU_THRESHOLD:
-                missing_conf = region_conf * (1.0 - best_iou)
+                        "x": head["bbox"][0],
+                        "y": head["bbox"][1],
+                        "width": head["bbox"][2] - head["bbox"][0],
+                        "height": head["bbox"][3] - head["bbox"][1],
+                    }
+                })
+        
+        # Check each ear for missing ear-mufs
+        for ear in ears:
+            if not has_ppe_nearby(ear, ear_mufs):
                 out_detections.append({
                     "missingPpe": "ear-mufs",
-                    "confidence": float(round(missing_conf, 4)),
+                    "confidence": ear["conf"],
                     "bbox": {
-                        "x": float(region_bbox[0]),
-                        "y": float(region_bbox[1]),
-                        "width": float(region_bbox[2] - region_bbox[0]),
-                        "height": float(region_bbox[3] - region_bbox[1])
-                        }
-                    })
-
-
-    out_detections = merge_detections(out_detections)
+                        "x": ear["bbox"][0],
+                        "y": ear["bbox"][1],
+                        "width": ear["bbox"][2] - ear["bbox"][0],
+                        "height": ear["bbox"][3] - ear["bbox"][1],
+                    }
+                })
+        
+        # Merge overlapping detections to avoid duplicates
+        if out_detections:
+            out_detections = merge_detections(out_detections, IOU_THRESHOLD)
+        
+        logger.info(f"Detected {len(out_detections)} missing PPE items in {image_path}")
+        
+    except Exception as e:
+        logger.error(f"Error during PPE detection on {image_path}: {e}")
+        return []
+    
     return out_detections
+
+
+def has_ppe_nearby(body_part: Dict, ppe_items: List[Dict], iou_threshold: float = 0.1) -> bool:
+    """
+    Check if a body part has associated PPE nearby using IoU overlap.
+    
+    Args:
+        body_part: Dictionary with bbox and confidence for body part (head/ear)
+        ppe_items: List of PPE items (helmets/ear-mufs) to check against
+        iou_threshold: Minimum IoU to consider PPE as associated with body part
+        
+    Returns:
+        True if PPE is found nearby, False otherwise
+    """
+    if not ppe_items:
+        return False
+    
+    body_bbox = body_part["bbox"]
+    body_box = (body_bbox[0], body_bbox[1], body_bbox[2], body_bbox[3])
+    
+    for ppe in ppe_items:
+        ppe_bbox = ppe["bbox"]
+        ppe_box = (ppe_bbox[0], ppe_bbox[1], ppe_bbox[2], ppe_bbox[3])
+        
+        # Check if PPE overlaps with body part
+        overlap = iou(body_box, ppe_box)
+        if overlap > iou_threshold:
+            return True
+        
+        # Also check proximity for ear-mufs which might be slightly offset
+        distance = calculate_distance(body_part["center"], ppe["center"])
+        # If centers are very close (within 50 pixels), consider it as worn
+        if distance < 50:
+            return True
+    
+    return False
+
+
+def calculate_distance(point1: tuple, point2: tuple) -> float:
+    """Calculate Euclidean distance between two points."""
+    return ((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2) ** 0.5
 
 def handle_alert(frame_id: str, captured_at: str, camera_id: str, detections: List[Dict], annotated_image: str) -> bool:
     """Handle cooldown logic and alert sending."""
