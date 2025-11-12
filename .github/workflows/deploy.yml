@@ -8,7 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: 🚀 Deploy to Production VM
         uses: appleboy/ssh-action@v1.0.0
@@ -18,5 +18,10 @@ jobs:
           password: ${{ secrets.VM_PASSWORD }}
           port: ${{ secrets.VM_SSH_PORT }}
           script: |
+            set -e
             cd /opt/ojitoo-frames
+            echo "🔄 Pulling latest changes..."
+            git fetch origin main
+            git reset --hard origin/main
+            echo "🏗️ Running deploy script..."
             sudo ./deploy.sh
